@@ -30,7 +30,7 @@ RAM_MB=$(( $(sysctl -n hw.memsize) / 1048576 ))
 GPU_MB="${QWEN_GPU_MB:-$(( RAM_MB * 7 / 8 ))}"
 
 server_up() { curl -sf "$URL/health" >/dev/null 2>&1; }
-human() { python3 -c "print(f'{$1/1e9:.1f} GB')"; }
+human() { [[ "$1" == <-> ]] && awk -v n="$1" 'BEGIN{printf "%.1f GB", n/1e9}' || echo "?"; }
 
 # --- GPU bellek sınırı (sudoers kuralı varsa şifresiz) ---------------------
 gpu_limit() { sudo -n /usr/sbin/sysctl "iogpu.wired_limit_mb=$1" >/dev/null 2>&1; }
@@ -146,6 +146,7 @@ download() {
 import json,sys
 for f in json.load(sys.stdin):
     p=f["path"]
+    if any(c in p for c in "\t\n\r") or not isinstance(f.get("size",0),int): continue
     if p.endswith(".gguf") and "mmproj" not in p.lower() and "fastmtp" not in p.lower():
         print(str(f.get("size",0))+"\t"+p)' | sort -n)"
     [[ -z "$listing" ]] && { echo "Repo okunamadı ya da GGUF dosyası yok: $repo" >&2; exit 1; }
@@ -153,6 +154,7 @@ for f in json.load(sys.stdin):
     echo "RAM: $(( RAM_MB / 1024 )) GB (bağlam + sistem için ~6 GB pay bırak)"
     for i in {1..${#lines}}; do
       size="${lines[$i]%%$'\t'*}"; p="${lines[$i]#*$'\t'}"
+      [[ "$size" == <-> ]] || size=0
       fit="sığar"; (( size / 1048576 > RAM_MB - 6144 )) && fit="BÜYÜK"
       [[ -f "$MODELS_DIR/${p:t}" ]] && fit="indirildi"
       printf "  %2d) %-70s %8s  %s\n" $i "$p" "$(human $size)" "$fit"
@@ -182,7 +184,7 @@ setup() {
   echo "İsteğe bağlı (MTP / büyük bağlam için): sunucu açıkken GPU bellek sınırını şifresiz"
   echo "yükseltebilmek için AYRI bir terminalde şunu çalıştır:"
   echo
-  echo "  echo '$(sudoers_rule)' > /tmp/claude-qwen.sudoers && sudo visudo -cf /tmp/claude-qwen.sudoers && sudo install -m 440 -o root -g wheel /tmp/claude-qwen.sudoers /etc/sudoers.d/claude-qwen"
+  echo "  echo '$(sudoers_rule)' | sudo tee /etc/sudoers.d/claude-qwen.tmp >/dev/null && sudo chmod 440 /etc/sudoers.d/claude-qwen.tmp && sudo visudo -cf /etc/sudoers.d/claude-qwen.tmp && sudo mv /etc/sudoers.d/claude-qwen.tmp /etc/sudoers.d/claude-qwen"
   echo
   list_models | grep -q . || echo "Model indirmek için: claude-qwen download unsloth/Qwen3.8-27B-GGUF"
 }

@@ -58,7 +58,7 @@ claude-qwen status | stop | log
 
 ### GPU bellek sınırı (isteğe bağlı)
 
-macOS, GPU'ya varsayılan olarak RAM'in ~%75'ini verir. 24 GB'lık bir Mac'te bu sınır 27B model + 100K bağlam + MTP için yetmez. `claude-qwen setup` komutu, yalnızca iki komuta şifresiz sudo izni veren dar bir kural yazdırır: `sysctl iogpu.wired_limit_mb=<N>` ve `sysctl iogpu.wired_limit_mb=0`. Bu kuralı kurarsan betik, sunucu açıkken sınırı yükseltir ve kapanınca varsayılana döndürür. Kurmazsan her şey normal çalışır, yalnızca MTP kapalı kalır.
+macOS, GPU'ya varsayılan olarak RAM'in ~%75'ini verir. 24 GB'lık bir Mac'te bu sınır 27B model + 100K bağlam + MTP için yetmez. `claude-qwen setup` komutu (geçici dosyayı doğrudan root olarak `/etc/sudoers.d` içine yazar, `visudo` ile doğrular), yalnızca iki komuta şifresiz sudo izni veren dar bir kural yazdırır: `sysctl iogpu.wired_limit_mb=<N>` ve `sysctl iogpu.wired_limit_mb=0`. Bu kuralı kurarsan betik, sunucu açıkken sınırı yükseltir ve kapanınca varsayılana döndürür. Kurmazsan her şey normal çalışır, yalnızca MTP kapalı kalır.
 
 ## Performans (Apple M6, 24 GB, Qwen3.8-27B IQ4_XS)
 
