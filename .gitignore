@@ -1,0 +1,7 @@
+models/
+sessions/
+*.log
+*.pid
+*.part
+*.sudoers
+.DS_Store
