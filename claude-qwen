@@ -160,7 +160,8 @@ launch_remote() {  # launch_remote <name> <base-url> <keyspec> [claude args...]
   local key; key="$(read_key "$keyspec")" || exit 1
   [[ -n "$key" ]] || { echo "Empty API key for $name ($keyspec)" >&2; exit 1; }
   local listing
-  listing="$(curl -sf -m 30 "$base/v1/models" -H "Authorization: Bearer $key" | python3 -c '
+  # The key goes to curl via stdin (-K -), not argv, so it never shows up in `ps`. printf is a zsh builtin.
+  listing="$(printf 'header = "Authorization: Bearer %s"\n' "$key" | curl -sf -m 30 -K - "$base/v1/models" | python3 -c '
 import json,sys
 d=json.load(sys.stdin); ms=d.get("data",d) if isinstance(d,dict) else d
 for m in ms:
