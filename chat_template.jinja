@@ -29,14 +29,16 @@
                 {{- '<|vision_start|><|video_pad|><|vision_end|>' }}
             {%- elif 'text' in item %}
                 {{- item.text }}
+            {%- elif item.content is defined and item.content is string %}
+                {{- item.content }}
             {%- else %}
-                {{- raise_exception('Unexpected item type in content.') }}
+                {{- '[' ~ (item.type if item.type is defined else 'unknown') ~ ' content omitted]' }}
             {%- endif %}
         {%- endfor %}
     {%- elif content is none or content is undefined %}
         {{- '' }}
     {%- else %}
-        {{- raise_exception('Unexpected content type.') }}
+        {{- content | string }}
     {%- endif %}
 {%- endmacro %}
 {%- if not messages %}

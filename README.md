@@ -53,7 +53,8 @@ claude-qwen                     # pick a model and open Claude Code
 claude-qwen -p "question"       # any other arguments are passed through to claude
 claude-qwen download [repo]     # download a GGUF
 claude-qwen models              # list downloaded models
-claude-qwen status | stop | log
+claude-qwen start | stop | restart  # manage the server without opening Claude Code
+claude-qwen status | log
 claude-qwen version
 ```
 

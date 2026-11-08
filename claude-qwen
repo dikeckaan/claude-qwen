@@ -5,7 +5,8 @@
 #   claude-qwen download [repo] [file]  download a GGUF from Hugging Face (asks if no repo given)
 #   claude-qwen models                  list downloaded models
 #   claude-qwen setup                   install llama.cpp, link the command, show the sudo rule
-#   claude-qwen stop | status | log     stop the server / show status / follow the log
+#   claude-qwen start | stop | restart  manage the server without opening Claude Code
+#   claude-qwen status | log            show status / follow the log
 #   claude-qwen version
 #
 # Data (models, logs): the checkout dir in a git clone, otherwise ~/.claude-qwen (override: CLAUDE_QWEN_HOME)
@@ -209,6 +210,8 @@ setup() {
 
 case "${1:-}" in
   stop)     stop_server; exit 0 ;;
+  start)    choose_model; start_server; exit 0 ;;
+  restart)  QWEN_MODEL="${QWEN_MODEL:-$(running_model)}"; stop_server; choose_model; start_server; exit 0 ;;
   status)   server_up && echo "Running: $URL ($(running_model))" || echo "Stopped"; exit 0 ;;
   log)      exec tail -f "$LOG" ;;
   models)   list_models | while read -r f; do echo "${f:t}  ($(human $(stat -f%z "$f")))"; done; exit 0 ;;
