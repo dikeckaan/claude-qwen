@@ -8,6 +8,7 @@ A single-file launcher that runs [Claude Code](https://code.claude.com) against 
 - **Model picker:** finds every GGUF file in the `models/` directory.
 - **Model downloader:** `claude-qwen download <hf-repo>` lists the repo's GGUF files with their sizes and whether they fit in your RAM. Interrupted downloads resume where they stopped.
 - **Image input:** if `<model>.mmproj.gguf` (the model's vision projector, ~1 GB) sits next to the model, it is loaded automatically so Claude Code can send screenshots and images. The downloader offers it after downloading a model.
+- **Remote providers:** besides local models, the startup menu can offer any Anthropic-compatible API (for example [refuseless](https://refuseless.com)). It fetches the provider's model list, lets you pick one, and registers all of them in Claude Code's `/model` picker for that session only.
 - **Auto shutdown:** when the last session closes, the server stops and frees its RAM.
 - **Template fix:** Qwen3.8's stock chat template fails with `System message must be at the beginning` on the system messages Claude Code sends mid-conversation. `chat_template.jinja` is a patched version that accepts them.
 - **Optional GPU memory tuning:** raises macOS's GPU wired-memory limit (`iogpu.wired_limit_mb`) while the server runs and restores the default when it stops. If the limit is high enough, MTP speculative decoding turns on automatically (~60% faster generation).
@@ -57,6 +58,7 @@ claude-qwen models              # list downloaded models
 claude-qwen start | stop | restart  # manage the server without opening Claude Code
 claude-qwen status | log
 claude-qwen version
+claude-qwen providers           # show configured remote providers
 ```
 
 | Variable | Default | Description |
@@ -69,11 +71,38 @@ claude-qwen version
 | `QWEN_VISION` | `1` | `0`: don't load the vision projector (saves ~1 GB, no image input) |
 | `QWEN_GPU_MB` | RAM × 7/8 | GPU wired-memory limit to use while the server runs |
 | `QWEN_EXTRA` | | Extra `llama-server` arguments |
+| `QWEN_BACKEND` | (menu) | Skip the backend menu: `local`, a provider name, or a number |
+| `QWEN_REMOTE_MODEL` | (menu) | Skip the remote model menu: a model ID |
+| `QWEN_REMOTE_CTX` | `1000000` | Context window Claude Code assumes for remote models |
 | `CLAUDE_QWEN_HOME` | `~/.claude-qwen` | Data directory for models, logs and sessions (a git clone uses its own directory) |
 
 ### GPU memory limit (optional)
 
 By default macOS gives the GPU about 75% of RAM. On a 24 GB Mac that is not enough for a 27B model plus 100K context plus MTP. `claude-qwen setup` prints a command that installs a narrow sudoers rule allowing exactly two commands without a password: `sysctl iogpu.wired_limit_mb=<N>` and `sysctl iogpu.wired_limit_mb=0`. The command writes the rule as root directly into `/etc/sudoers.d` and validates it with `visudo` before activating it. With the rule installed, the script raises the limit while the server runs and restores the default when it stops. Without it everything still works; MTP just stays off.
+
+## Remote providers
+
+Add Anthropic-compatible providers (anything that serves `/v1/messages` and `/v1/models`) to `~/.config/claude-qwen/providers.conf`:
+
+```
+# <name>      <base-url>                    <key: env:VAR or file:/path>
+refuseless    https://api.refuseless.com    env:REFUSELESS_API_KEY
+other         https://api.example.com       file:/Volumes/MyDrive/other-key.txt
+```
+
+When the file has at least one provider, `claude-qwen` asks first:
+
+```
+Which backend?
+  1) local  (llama.cpp, models in ~/.claude-qwen/models)
+  2) refuseless  (https://api.refuseless.com)
+```
+
+For a provider, it lists the models from `/v1/models` with context size, price and vision support, and starts Claude Code on the one you pick. Every model from the provider is also selectable with `/model` during that session, through Claude Code's gateway model discovery. Nothing is saved to your Claude Code settings.
+
+The key is read when you launch and passed only to that Claude Code process. A `file:` key lets you keep it on an external drive; if the drive isn't mounted you get a clear error.
+
+Skip the menus with `QWEN_BACKEND=refuseless QWEN_REMOTE_MODEL=glm-5.3-flash-abliterated claude-qwen`. `claude-qwen providers` shows what is configured.
 
 ## Performance (Apple M6, 24 GB, 100K context)
 

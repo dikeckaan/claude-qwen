@@ -8,6 +8,7 @@
 #   claude-qwen start | stop | restart  manage the server without opening Claude Code
 #   claude-qwen status | log            show status / follow the log
 #   claude-qwen version
+#   claude-qwen providers               show configured remote providers (~/.config/claude-qwen/providers.conf)
 #
 # Data (models, logs): the checkout dir in a git clone, otherwise ~/.claude-qwen (override: CLAUDE_QWEN_HOME)
 #
@@ -15,12 +16,14 @@
 #   QWEN_MODEL=<n|file-name>   skip the menu          QWEN_CTX=102400   context size
 #   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=auto|0|1 MTP speculative decoding
 #   QWEN_KEEP=1                keep the server running after the session ends
+#   QWEN_BACKEND=<n|name>      skip the backend menu (local or a provider name)
+#   QWEN_REMOTE_MODEL=<id>     skip the remote model menu
 #   QWEN_VISION=0              don't load <model>.mmproj.gguf (saves ~1 GB; no image input)
 #   QWEN_GPU_MB=<MB>           iogpu.wired_limit_mb while the server runs (default: 7/8 of RAM)
 #   QWEN_PORT=8088             QWEN_EXTRA="..." extra llama-server arguments
 set -u
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 DIR="${0:A:h}"   # real location of this script (symlinks resolved)
 # Data dir: the checkout itself in a git clone (if models/ is next to it), ~/.claude-qwen for brew installs
 if [[ -n "${CLAUDE_QWEN_HOME:-}" ]]; then DATA="$CLAUDE_QWEN_HOME"
@@ -103,6 +106,99 @@ start_server() {
     sleep 1
   done
   echo "Server start timed out, log: $LOG" >&2; exit 1
+}
+
+# --- Remote providers (Anthropic-compatible APIs) --------------------------
+# ~/.config/claude-qwen/providers.conf, one per line:   <name> <base-url> <key>
+#   <key> is env:VAR_NAME or file:/path/to/key.txt  (the key is read at launch, never copied)
+PROVIDERS_FILE="${CLAUDE_QWEN_PROVIDERS:-$HOME/.config/claude-qwen/providers.conf}"
+
+list_providers() {
+  [[ -f "$PROVIDERS_FILE" ]] || return 0
+  local name url key
+  while read -r name url key _; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    echo "$name $url $key"
+  done < "$PROVIDERS_FILE"
+}
+
+read_key() {  # read_key env:VAR | file:/path
+  case "$1" in
+    env:*)  local v="${1#env:}"; print -r -- "${(P)v:-}" ;;
+    file:*) local f="${~1#file:}"
+            [[ -r "$f" ]] || { echo "Key file not readable: $f (is the drive mounted?)" >&2; return 1; }
+            tr -d '[:space:]' < "$f" ;;
+    *)      echo "Unknown key spec '$1' (use env:VAR or file:/path)" >&2; return 1 ;;
+  esac
+}
+
+# Prints "local" or "<name> <url> <keyspec>"
+choose_backend() {
+  local provs=("${(@f)$(list_providers)}")
+  [[ -z "${provs[1]:-}" ]] && { echo local; return; }
+  local pick="${QWEN_BACKEND:-}" i
+  if [[ -z "$pick" ]]; then
+    {
+      echo "Which backend?"
+      echo "  1) local  (llama.cpp, models in $MODELS_DIR)"
+      for i in {1..${#provs}}; do echo "  $((i+1))) ${provs[$i]%% *}  (${${provs[$i]#* }%% *})"; done
+    } >&2
+    read "pick?Choice [1]: " </dev/tty
+    [[ -z "$pick" ]] && pick=1
+  fi
+  [[ "$pick" == 1 || "$pick" == local ]] && { echo local; return; }
+  if [[ "$pick" == <-> ]]; then
+    (( pick >= 2 && pick <= ${#provs} + 1 )) || { echo "Invalid choice: $pick" >&2; exit 1; }
+    echo "${provs[$((pick-1))]}"; return
+  fi
+  for i in {1..${#provs}}; do [[ "${provs[$i]%% *}" == "$pick" ]] && { echo "${provs[$i]}"; return; }; done
+  echo "Unknown backend: $pick" >&2; exit 1
+}
+
+launch_remote() {  # launch_remote <name> <base-url> <keyspec> [claude args...]
+  local name="$1" base="${2%/}" keyspec="$3"; shift 3
+  local key; key="$(read_key "$keyspec")" || exit 1
+  [[ -n "$key" ]] || { echo "Empty API key for $name ($keyspec)" >&2; exit 1; }
+  local listing
+  listing="$(curl -sf -m 30 "$base/v1/models" -H "Authorization: Bearer $key" | python3 -c '
+import json,sys
+d=json.load(sys.stdin); ms=d.get("data",d) if isinstance(d,dict) else d
+for m in ms:
+    i=str(m.get("id",""))
+    if not i or any(c in i for c in " \t\n\r"): continue
+    p=m.get("pricing") or {}
+    price="$%s/$%s per M in/out" % (p.get("input_per_m","?"), p.get("output_per_m","?")) if p else ""
+    ctx=m.get("context_length"); ctx=f"{int(ctx)//1000}K ctx" if isinstance(ctx,int) else ""
+    vis="vision" if m.get("vision") else ""
+    print(i+"\t"+"  ".join(x for x in (ctx,price,vis) if x))')" \
+    || { echo "Could not list models from $base/v1/models" >&2; exit 1; }
+  [[ -n "$listing" ]] || { echo "$name returned no models" >&2; exit 1; }
+  local lines=("${(@f)listing}") i pick="${QWEN_REMOTE_MODEL:-}" model=""
+  if [[ -z "$pick" ]]; then
+    echo "Models on $name (all of them are selectable with /model in this session):"
+    for i in {1..${#lines}}; do printf "  %d) %-34s %s\n" $i "${lines[$i]%%$'\t'*}" "${lines[$i]#*$'\t'}"; done
+    read "pick?Start with [1]: "
+    [[ -z "$pick" ]] && pick=1
+  fi
+  if [[ "$pick" == <-> ]]; then
+    (( pick >= 1 && pick <= ${#lines} )) || { echo "Invalid choice: $pick" >&2; exit 1; }
+    model="${lines[$pick]%%$'\t'*}"
+  else
+    model="$pick"
+  fi
+  echo "Starting Claude Code on $name / $model"
+  # Gateway model discovery registers the provider's /v1/models in the /model picker for this session only.
+  ANTHROPIC_BASE_URL="$base" \
+  ANTHROPIC_AUTH_TOKEN="$key" \
+  ANTHROPIC_MODEL="$model" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
+  ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="$model" \
+  CLAUDE_CODE_SUBAGENT_MODEL="$model" \
+  CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 \
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS="${QWEN_REMOTE_CTX:-1000000}" \
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    exec claude "$@"
 }
 
 # --- Models ----------------------------------------------------------------
@@ -237,7 +333,13 @@ case "${1:-}" in
   download) shift; download "$@"; exit $? ;;
   setup)    setup; exit 0 ;;
   version|--version) echo "claude-qwen $VERSION"; exit 0 ;;
+  providers) echo "Config: $PROVIDERS_FILE"; list_providers | awk '{print "  "$1"  "$2"  ("$3")"}'; exit 0 ;;
 esac
+
+BACKEND="$(choose_backend)" || exit 1
+if [[ "$BACKEND" != local ]]; then
+  launch_remote ${=BACKEND} "$@"
+fi
 
 choose_model
 start_server
