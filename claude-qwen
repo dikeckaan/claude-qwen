@@ -9,7 +9,7 @@
 #
 # Ortam değişkenleri:
 #   QWEN_MODEL=<no|dosya-adı>  menüyü atla           QWEN_CTX=102400   bağlam boyutu
-#   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=0|1      MTP spekülatif çözme
+#   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=auto|0|1 MTP spekülatif çözme
 #   QWEN_KEEP=1                oturum kapanınca sunucuyu açık tut
 #   QWEN_GPU_MB=<MB>           sunucu açıkken iogpu.wired_limit_mb (varsayılan: RAM'in 7/8'i)
 #   QWEN_PORT=8088             QWEN_EXTRA="..." ek llama-server argümanları
@@ -20,7 +20,7 @@ MODELS_DIR="$DIR/models"
 PORT="${QWEN_PORT:-8088}"
 CTX="${QWEN_CTX:-102400}"
 EFFORT="${QWEN_EFFORT:-medium}"
-MTP="${QWEN_MTP:-0}"
+MTP="${QWEN_MTP:-auto}"
 PIDFILE="$DIR/server.pid"
 LOG="$DIR/server.log"
 SESSIONS="$DIR/sessions"
@@ -59,7 +59,10 @@ start_server() {
   server_up && return 0
   [[ -f "$MODEL" ]] || { echo "Model bulunamadı: $MODEL" >&2; exit 1; }
   command -v llama-server >/dev/null || { echo "llama-server yok. Önce: claude-qwen setup" >&2; exit 1; }
-  if ! gpu_limit "$GPU_MB"; then
+  # MTP ek GPU belleği ister: sınır yükseltilebildiyse (ya da zaten yüksekse) aç
+  if gpu_limit "$GPU_MB" || (( $(sysctl -n iogpu.wired_limit_mb) >= GPU_MB )); then
+    [[ "$MTP" == auto ]] && MTP=1
+  else
     [[ "$MTP" == 1 ]] && echo "Uyarı: GPU bellek sınırı yükseltilemedi (bkz. claude-qwen setup); MTP kapatıldı." >&2
     MTP=0
   fi
@@ -67,7 +70,7 @@ start_server() {
   [[ "$MTP" == 1 ]] && extra+=(--spec-type draft-mtp --spec-draft-n-max 3)
   # Qwen3.8 şablonu Claude Code'un konuşma ortası system mesajlarını reddediyor; yamalı şablonu kullan.
   [[ "${MODEL:t}" == *[Qq]wen3.8* && -f "$DIR/chat_template.jinja" ]] && extra+=(--chat-template-file "$DIR/chat_template.jinja")
-  echo "${MODEL:t} yükleniyor (~30-60 sn)..."
+  echo "${MODEL:t} yükleniyor (~30-60 sn, MTP: $([[ $MTP == 1 ]] && echo açık || echo kapalı))..."
   nohup llama-server \
     -m "$MODEL" --alias "$ALIAS" \
     --host 127.0.0.1 --port "$PORT" \
