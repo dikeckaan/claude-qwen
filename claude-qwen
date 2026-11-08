@@ -1,31 +1,31 @@
 #!/bin/zsh
-# claude-qwen: Claude Code'u yerel bir GGUF modeliyle (llama.cpp / llama-server) çalıştırır.
+# claude-qwen: run Claude Code against a local GGUF model (llama.cpp / llama-server).
 #
-#   claude-qwen [claude argümanları]    model seç, sunucuyu gerekirse başlat, Claude Code'u aç
-#   claude-qwen download [repo] [dosya] Hugging Face'ten GGUF indir (repo vermezsen sorar)
-#   claude-qwen models                  indirilmiş modelleri listele
-#   claude-qwen setup                   llama.cpp kur, komutu PATH'e bağla, sudo kuralını göster
-#   claude-qwen stop | status | log     sunucuyu durdur / durum / logu izle
+#   claude-qwen [claude args]           pick a model, start the server if needed, open Claude Code
+#   claude-qwen download [repo] [file]  download a GGUF from Hugging Face (asks if no repo given)
+#   claude-qwen models                  list downloaded models
+#   claude-qwen setup                   install llama.cpp, link the command, show the sudo rule
+#   claude-qwen stop | status | log     stop the server / show status / follow the log
 #   claude-qwen version
 #
-# Veri (modeller, log): git klonunda klasörün kendisi, aksi halde ~/.claude-qwen (CLAUDE_QWEN_HOME ile değişir)
+# Data (models, logs): the checkout dir in a git clone, otherwise ~/.claude-qwen (override: CLAUDE_QWEN_HOME)
 #
-# Ortam değişkenleri:
-#   QWEN_MODEL=<no|dosya-adı>  menüyü atla           QWEN_CTX=102400   bağlam boyutu
-#   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=auto|0|1 MTP spekülatif çözme
-#   QWEN_KEEP=1                oturum kapanınca sunucuyu açık tut
-#   QWEN_GPU_MB=<MB>           sunucu açıkken iogpu.wired_limit_mb (varsayılan: RAM'in 7/8'i)
-#   QWEN_PORT=8088             QWEN_EXTRA="..." ek llama-server argümanları
+# Environment variables:
+#   QWEN_MODEL=<n|file-name>   skip the menu          QWEN_CTX=102400   context size
+#   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=auto|0|1 MTP speculative decoding
+#   QWEN_KEEP=1                keep the server running after the session ends
+#   QWEN_GPU_MB=<MB>           iogpu.wired_limit_mb while the server runs (default: 7/8 of RAM)
+#   QWEN_PORT=8088             QWEN_EXTRA="..." extra llama-server arguments
 set -u
 
-VERSION="0.1.0"
-DIR="${0:A:h}"   # betiğin gerçek konumu (symlink çözülmüş)
-# Veri klasörü: git klonunda (yanında models/ varsa) klasörün kendisi, brew kurulumunda ~/.claude-qwen
+VERSION="0.1.1"
+DIR="${0:A:h}"   # real location of this script (symlinks resolved)
+# Data dir: the checkout itself in a git clone (if models/ is next to it), ~/.claude-qwen for brew installs
 if [[ -n "${CLAUDE_QWEN_HOME:-}" ]]; then DATA="$CLAUDE_QWEN_HOME"
 elif [[ -d "$DIR/models" ]]; then DATA="$DIR"
 else DATA="$HOME/.claude-qwen"; fi
 mkdir -p "$DATA"
-# Yamalı şablon: klonda betiğin yanında, brew'da ../share/claude-qwen altında
+# Patched template: next to the script in a clone, ../share/claude-qwen for brew
 TEMPLATE="$DIR/chat_template.jinja"
 [[ -f "$TEMPLATE" ]] || TEMPLATE="${DIR:h}/share/claude-qwen/chat_template.jinja"
 MODELS_DIR="$DATA/models"
@@ -44,13 +44,13 @@ GPU_MB="${QWEN_GPU_MB:-$(( RAM_MB * 7 / 8 ))}"
 server_up() { curl -sf "$URL/health" >/dev/null 2>&1; }
 human() { [[ "$1" == <-> ]] && awk -v n="$1" 'BEGIN{printf "%.1f GB", n/1e9}' || echo "?"; }
 
-# --- GPU bellek sınırı (sudoers kuralı varsa şifresiz) ---------------------
+# --- GPU wired-memory limit (passwordless if the sudoers rule is installed) --
 gpu_limit() { sudo -n /usr/sbin/sysctl "iogpu.wired_limit_mb=$1" >/dev/null 2>&1; }
 sudoers_rule() {
   echo "$(whoami) ALL=(root) NOPASSWD: /usr/sbin/sysctl iogpu.wired_limit_mb=$GPU_MB, /usr/sbin/sysctl iogpu.wired_limit_mb=0"
 }
 
-# --- Sunucu ----------------------------------------------------------------
+# --- Server ----------------------------------------------------------------
 stop_server() {
   local pid=""
   [[ -f "$PIDFILE" ]] && pid="$(cat "$PIDFILE")"
@@ -59,30 +59,30 @@ stop_server() {
     kill "$pid"
     for i in {1..10}; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
-    echo "Sunucu durduruldu."
+    echo "Server stopped."
     gpu_limit 0
   else
-    echo "Çalışan sunucu yok."
+    echo "No server running."
   fi
   rm -f "$PIDFILE"
 }
 
 start_server() {
   server_up && return 0
-  [[ -f "$MODEL" ]] || { echo "Model bulunamadı: $MODEL" >&2; exit 1; }
-  command -v llama-server >/dev/null || { echo "llama-server yok. Önce: claude-qwen setup" >&2; exit 1; }
-  # MTP ek GPU belleği ister: sınır yükseltilebildiyse (ya da zaten yüksekse) aç
+  [[ -f "$MODEL" ]] || { echo "Model not found: $MODEL" >&2; exit 1; }
+  command -v llama-server >/dev/null || { echo "llama-server not found. Run: claude-qwen setup" >&2; exit 1; }
+  # MTP needs extra GPU memory: enable it if the limit could be raised (or already is high enough)
   if gpu_limit "$GPU_MB" || (( $(sysctl -n iogpu.wired_limit_mb) >= GPU_MB )); then
     [[ "$MTP" == auto ]] && MTP=1
   else
-    [[ "$MTP" == 1 ]] && echo "Uyarı: GPU bellek sınırı yükseltilemedi (bkz. claude-qwen setup); MTP kapatıldı." >&2
+    [[ "$MTP" == 1 ]] && echo "Warning: could not raise the GPU memory limit (see claude-qwen setup); MTP disabled." >&2
     MTP=0
   fi
   local extra=()
   [[ "$MTP" == 1 ]] && extra+=(--spec-type draft-mtp --spec-draft-n-max 3)
-  # Qwen3.8 şablonu Claude Code'un konuşma ortası system mesajlarını reddediyor; yamalı şablonu kullan.
+  # The stock Qwen3.8 template rejects Claude Code's mid-conversation system messages; use the patched one.
   [[ "${MODEL:t}" == *[Qq]wen3.8* && -f "$TEMPLATE" ]] && extra+=(--chat-template-file "$TEMPLATE")
-  echo "${MODEL:t} yükleniyor (~30-60 sn, MTP: $([[ $MTP == 1 ]] && echo açık || echo kapalı))..."
+  echo "Loading ${MODEL:t} (~30-60 s, MTP: $([[ $MTP == 1 ]] && echo on || echo off))..."
   nohup llama-server \
     -m "$MODEL" --alias "$ALIAS" \
     --host 127.0.0.1 --port "$PORT" \
@@ -93,16 +93,16 @@ start_server() {
     >"$LOG" 2>&1 &
   echo $! >"$PIDFILE"
   for i in {1..300}; do
-    server_up && { echo "Sunucu hazır ($URL)."; return 0; }
-    kill -0 "$(cat "$PIDFILE")" 2>/dev/null || { echo "Sunucu çöktü, log: $LOG" >&2; tail -20 "$LOG" >&2; gpu_limit 0; exit 1; }
+    server_up && { echo "Server ready ($URL)."; return 0; }
+    kill -0 "$(cat "$PIDFILE")" 2>/dev/null || { echo "Server crashed, log: $LOG" >&2; tail -20 "$LOG" >&2; gpu_limit 0; exit 1; }
     sleep 1
   done
-  echo "Sunucu zaman aşımı, log: $LOG" >&2; exit 1
+  echo "Server start timed out, log: $LOG" >&2; exit 1
 }
 
-# --- Modeller --------------------------------------------------------------
+# --- Models ----------------------------------------------------------------
 list_models() {
-  # mmproj (görsel) ve harici MTP sidecar dosyaları ana model değildir
+  # mmproj (vision) files and external MTP sidecars are not main models
   local f
   for f in "$MODELS_DIR"/*.gguf(N); do
     [[ "${f:t}" == mmproj* || "${f:t}" == *FastMTP* ]] && continue
@@ -116,24 +116,24 @@ running_model() {
 
 choose_model() {
   local models=("${(@f)$(list_models)}")
-  [[ -z "${models[1]:-}" ]] && { echo "Hiç model yok. İndir: claude-qwen download <hf-repo>" >&2; exit 1; }
+  [[ -z "${models[1]:-}" ]] && { echo "No models found. Download one: claude-qwen download <hf-repo>" >&2; exit 1; }
   local running="$(running_model)" pick="${QWEN_MODEL:-}" i def=1
   for i in {1..${#models}}; do [[ "${models[$i]}" == "$running" ]] && def=$i; done
   if [[ -z "$pick" ]]; then
     if (( ${#models} == 1 )); then
       pick=1
     else
-      echo "Hangi model?"
+      echo "Which model?"
       for i in {1..${#models}}; do
-        local tag=""; [[ "${models[$i]}" == "$running" ]] && tag="  [şu an açık]"
+        local tag=""; [[ "${models[$i]}" == "$running" ]] && tag="  [running]"
         printf "  %d) %s  (%s)%s\n" $i "${models[$i]:t:r}" "$(human $(stat -f%z "${models[$i]}"))" "$tag"
       done
-      read "pick?Seçim [$def]: "
+      read "pick?Choice [$def]: "
       [[ -z "$pick" ]] && pick=$def
     fi
   fi
   if [[ "$pick" == <-> ]]; then
-    (( pick >= 1 && pick <= ${#models} )) || { echo "Geçersiz seçim: $pick" >&2; exit 1; }
+    (( pick >= 1 && pick <= ${#models} )) || { echo "Invalid choice: $pick" >&2; exit 1; }
     MODEL="${models[$pick]}"
   else
     MODEL="$MODELS_DIR/${pick:t}"; [[ "$MODEL" == *.gguf ]] || MODEL="$MODEL.gguf"
@@ -143,8 +143,8 @@ choose_model() {
     mkdir -p "$SESSIONS"
     for f in "$SESSIONS"/*(N); do kill -0 "${f:t}" 2>/dev/null && others=$((others+1)) || rm -f "$f"; done
     if (( others > 0 )); then
-      read "yn?Açık $others oturum başka modeli kullanıyor; değiştirirsem onlar da yeni modele geçer. Devam? [e/H]: "
-      [[ "$yn" == [eEyY]* ]] || exit 1
+      read "yn?$others open session(s) use another model; switching will move them to the new model too. Continue? [y/N]: "
+      [[ "$yn" == [yY]* ]] || exit 1
     fi
     stop_server
   fi
@@ -152,9 +152,9 @@ choose_model() {
 
 download() {
   local repo="${1:-}" file="${2:-}"
-  [[ -z "$repo" ]] && read "repo?Hugging Face repo (örn. unsloth/Qwen3.8-27B-GGUF): "
+  [[ -z "$repo" ]] && read "repo?Hugging Face repo (e.g. unsloth/Qwen3.8-27B-GGUF): "
   repo="${repo#https://huggingface.co/}"; repo="${repo%%/tree/*}"; repo="${repo%/}"
-  [[ "$repo" == */* ]] || { echo "Geçersiz repo: $repo" >&2; exit 1; }
+  [[ "$repo" == */* ]] || { echo "Invalid repo: $repo" >&2; exit 1; }
   if [[ -z "$file" ]]; then
     local listing
     listing="$(curl -sf "https://huggingface.co/api/models/$repo/tree/main?recursive=true" | python3 -c '
@@ -164,52 +164,52 @@ for f in json.load(sys.stdin):
     if any(c in p for c in "\t\n\r") or not isinstance(f.get("size",0),int): continue
     if p.endswith(".gguf") and "mmproj" not in p.lower() and "fastmtp" not in p.lower():
         print(str(f.get("size",0))+"\t"+p)' | sort -n)"
-    [[ -z "$listing" ]] && { echo "Repo okunamadı ya da GGUF dosyası yok: $repo" >&2; exit 1; }
+    [[ -z "$listing" ]] && { echo "Could not read the repo, or it has no GGUF files: $repo" >&2; exit 1; }
     local lines=("${(@f)listing}") i size p fit
-    echo "RAM: $(( RAM_MB / 1024 )) GB (bağlam + sistem için ~6 GB pay bırak)"
+    echo "RAM: $(( RAM_MB / 1024 )) GB (leave ~6 GB for context + OS)"
     for i in {1..${#lines}}; do
       size="${lines[$i]%%$'\t'*}"; p="${lines[$i]#*$'\t'}"
       [[ "$size" == <-> ]] || size=0
-      fit="sığar"; (( size / 1048576 > RAM_MB - 6144 )) && fit="BÜYÜK"
-      [[ -f "$MODELS_DIR/${p:t}" ]] && fit="indirildi"
+      fit="fits"; (( size / 1048576 > RAM_MB - 6144 )) && fit="TOO BIG"
+      [[ -f "$MODELS_DIR/${p:t}" ]] && fit="downloaded"
       printf "  %2d) %-70s %8s  %s\n" $i "$p" "$(human $size)" "$fit"
     done
-    local pick; read "pick?Hangisi? (no): "
-    [[ "$pick" == <-> ]] && (( pick >= 1 && pick <= ${#lines} )) || { echo "Geçersiz seçim." >&2; exit 1; }
+    local pick; read "pick?Which one? (number): "
+    [[ "$pick" == <-> ]] && (( pick >= 1 && pick <= ${#lines} )) || { echo "Invalid choice." >&2; exit 1; }
     file="${lines[$pick]#*$'\t'}"
   fi
   mkdir -p "$MODELS_DIR"
   local out="$MODELS_DIR/${file:t}"
-  echo "İndiriliyor: $repo/$file -> $out"
-  # -C - : yarıda kalırsa aynı komut kaldığı yerden devam eder
+  echo "Downloading: $repo/$file -> $out"
+  # -C - : if interrupted, running the same command again resumes the download
   if curl -fL -C - --retry 5 --progress-bar -o "$out.part" "https://huggingface.co/$repo/resolve/main/$file"; then
-    mv "$out.part" "$out" && echo "Tamam: ${out:t}"
+    mv "$out.part" "$out" && echo "Done: ${out:t}"
   else
-    echo "İndirme yarıda kaldı; aynı komutu tekrar çalıştırırsan devam eder." >&2; exit 1
+    echo "Download interrupted; run the same command again to resume." >&2; exit 1
   fi
 }
 
 setup() {
-  command -v brew >/dev/null || { echo "Homebrew gerekli: https://brew.sh" >&2; exit 1; }
+  command -v brew >/dev/null || { echo "Homebrew is required: https://brew.sh" >&2; exit 1; }
   command -v llama-server >/dev/null || brew install llama.cpp
-  command -v claude >/dev/null || echo "Claude Code bulunamadı: https://code.claude.com"
+  command -v claude >/dev/null || echo "Claude Code not found: https://code.claude.com"
   if [[ "$DIR" != */Cellar/* ]]; then
     mkdir -p "$HOME/.local/bin" && ln -sf "$DIR/claude-qwen" "$HOME/.local/bin/claude-qwen"
-    echo "claude-qwen -> ~/.local/bin/claude-qwen (bu klasör PATH'te olmalı)"
+    echo "claude-qwen -> ~/.local/bin/claude-qwen (make sure this directory is on your PATH)"
   fi
-  echo "Veri klasörü: $DATA"
+  echo "Data directory: $DATA"
   echo
-  echo "İsteğe bağlı (MTP / büyük bağlam için): sunucu açıkken GPU bellek sınırını şifresiz"
-  echo "yükseltebilmek için AYRI bir terminalde şunu çalıştır:"
+  echo "Optional (for MTP / large contexts): to let claude-qwen raise the GPU memory limit"
+  echo "without a password while the server runs, run this in a SEPARATE terminal:"
   echo
   echo "  echo '$(sudoers_rule)' | sudo tee /etc/sudoers.d/claude-qwen.tmp >/dev/null && sudo chmod 440 /etc/sudoers.d/claude-qwen.tmp && sudo visudo -cf /etc/sudoers.d/claude-qwen.tmp && sudo mv /etc/sudoers.d/claude-qwen.tmp /etc/sudoers.d/claude-qwen"
   echo
-  list_models | grep -q . || echo "Model indirmek için: claude-qwen download unsloth/Qwen3.8-27B-GGUF"
+  list_models | grep -q . || echo "To download a model: claude-qwen download unsloth/Qwen3.8-27B-GGUF"
 }
 
 case "${1:-}" in
   stop)     stop_server; exit 0 ;;
-  status)   server_up && echo "Çalışıyor: $URL ($(running_model))" || echo "Kapalı"; exit 0 ;;
+  status)   server_up && echo "Running: $URL ($(running_model))" || echo "Stopped"; exit 0 ;;
   log)      exec tail -f "$LOG" ;;
   models)   list_models | while read -r f; do echo "${f:t}  ($(human $(stat -f%z "$f")))"; done; exit 0 ;;
   download) shift; download "$@"; exit $? ;;
@@ -220,7 +220,7 @@ esac
 choose_model
 start_server
 
-# Oturum takibi: son oturum kapanınca sunucuyu kapat (RAM'i ve GPU sınırını geri ver).
+# Session tracking: stop the server when the last session exits (frees RAM, restores the GPU limit).
 mkdir -p "$SESSIONS"
 touch "$SESSIONS/$$"
 cleanup() {
