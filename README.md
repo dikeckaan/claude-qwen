@@ -7,6 +7,7 @@ A single-file launcher that runs [Claude Code](https://code.claude.com) against 
 - Type `claude-qwen`, pick a model, and Claude Code opens. The server starts if needed.
 - **Model picker:** finds every GGUF file in the `models/` directory.
 - **Model downloader:** `claude-qwen download <hf-repo>` lists the repo's GGUF files with their sizes and whether they fit in your RAM. Interrupted downloads resume where they stopped.
+- **Image input:** if `<model>.mmproj.gguf` (the model's vision projector, ~1 GB) sits next to the model, it is loaded automatically so Claude Code can send screenshots and images. The downloader offers it after downloading a model.
 - **Auto shutdown:** when the last session closes, the server stops and frees its RAM.
 - **Template fix:** Qwen3.8's stock chat template fails with `System message must be at the beginning` on the system messages Claude Code sends mid-conversation. `chat_template.jinja` is a patched version that accepts them.
 - **Optional GPU memory tuning:** raises macOS's GPU wired-memory limit (`iogpu.wired_limit_mb`) while the server runs and restores the default when it stops. If the limit is high enough, MTP speculative decoding turns on automatically (~60% faster generation).
@@ -65,6 +66,7 @@ claude-qwen version
 | `QWEN_EFFORT` | `medium` | Reasoning effort: `xhigh`, `medium`, `low`, `none` |
 | `QWEN_MTP` | `auto` | Speculative decoding with the model's built-in MTP head. `auto`: on when the GPU limit allows. `0`/`1`: force off/on |
 | `QWEN_KEEP` | `0` | `1`: keep the server running after the session closes |
+| `QWEN_VISION` | `1` | `0`: don't load the vision projector (saves ~1 GB, no image input) |
 | `QWEN_GPU_MB` | RAM × 7/8 | GPU wired-memory limit to use while the server runs |
 | `QWEN_EXTRA` | | Extra `llama-server` arguments |
 | `CLAUDE_QWEN_HOME` | `~/.claude-qwen` | Data directory for models, logs and sessions (a git clone uses its own directory) |

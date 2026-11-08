@@ -15,6 +15,7 @@
 #   QWEN_MODEL=<n|file-name>   skip the menu          QWEN_CTX=102400   context size
 #   QWEN_EFFORT=medium         xhigh|medium|low|none  QWEN_MTP=auto|0|1 MTP speculative decoding
 #   QWEN_KEEP=1                keep the server running after the session ends
+#   QWEN_VISION=0              don't load <model>.mmproj.gguf (saves ~1 GB; no image input)
 #   QWEN_GPU_MB=<MB>           iogpu.wired_limit_mb while the server runs (default: 7/8 of RAM)
 #   QWEN_PORT=8088             QWEN_EXTRA="..." extra llama-server arguments
 set -u
@@ -81,9 +82,12 @@ start_server() {
   fi
   local extra=()
   [[ "$MTP" == 1 ]] && extra+=(--spec-type draft-mtp --spec-draft-n-max 3)
+  # Vision: <model>.mmproj.gguf next to the model enables image input (QWEN_VISION=0 disables it)
+  local mmproj="${MODEL:r}.mmproj.gguf" vision=off
+  if [[ -f "$mmproj" && "${QWEN_VISION:-1}" != 0 ]]; then extra+=(--mmproj "$mmproj"); vision=on; fi
   # The stock Qwen3.8 template rejects Claude Code's mid-conversation system messages; use the patched one.
   [[ "${MODEL:t}" == *[Qq]wen3.8* && -f "$TEMPLATE" ]] && extra+=(--chat-template-file "$TEMPLATE")
-  echo "Loading ${MODEL:t} (~30-60 s, MTP: $([[ $MTP == 1 ]] && echo on || echo off))..."
+  echo "Loading ${MODEL:t} (~30-60 s, MTP: $([[ $MTP == 1 ]] && echo on || echo off), vision: $vision)..."
   nohup llama-server \
     -m "$MODEL" --alias "$ALIAS" \
     --host 127.0.0.1 --port "$PORT" \
@@ -103,10 +107,10 @@ start_server() {
 
 # --- Models ----------------------------------------------------------------
 list_models() {
-  # mmproj (vision) files and external MTP sidecars are not main models
+  # vision projectors (mmproj / <model>.mmproj.gguf) and external MTP sidecars are not main models
   local f
   for f in "$MODELS_DIR"/*.gguf(N); do
-    [[ "${f:t}" == mmproj* || "${f:t}" == *FastMTP* ]] && continue
+    [[ "${f:t}" == mmproj* || "${f:t}" == *.mmproj.gguf || "${f:t}" == *FastMTP* ]] && continue
     echo "$f"
   done
 }
@@ -126,7 +130,8 @@ choose_model() {
     else
       echo "Which model?"
       for i in {1..${#models}}; do
-        local tag=""; [[ "${models[$i]}" == "$running" ]] && tag="  [running]"
+        local tag=""; [[ -f "${models[$i]:r}.mmproj.gguf" ]] && tag="  [vision]"
+        [[ "${models[$i]}" == "$running" ]] && tag="$tag  [running]"
         printf "  %d) %s  (%s)%s\n" $i "${models[$i]:t:r}" "$(human $(stat -f%z "${models[$i]}"))" "$tag"
       done
       read "pick?Choice [$def]: "
@@ -181,12 +186,26 @@ for f in json.load(sys.stdin):
   fi
   mkdir -p "$MODELS_DIR"
   local out="$MODELS_DIR/${file:t}"
-  echo "Downloading: $repo/$file -> $out"
-  # -C - : if interrupted, running the same command again resumes the download
-  if curl -fL -C - --retry 5 --progress-bar -o "$out.part" "https://huggingface.co/$repo/resolve/main/$file"; then
-    mv "$out.part" "$out" && echo "Done: ${out:t}"
+  fetch "$repo" "$file" "$out" || exit 1
+  # Offer the vision projector (enables image input in Claude Code)
+  local proj
+  proj="$(curl -sf "https://huggingface.co/api/models/$repo/tree/main?recursive=true" | python3 -c '
+import json,sys
+fs=[f["path"] for f in json.load(sys.stdin) if "mmproj" in f["path"].lower() and f["path"].endswith(".gguf") and not any(c in f["path"] for c in "\t\n\r")]
+fs.sort(key=lambda p: (0 if "f16" in p.lower() and "bf16" not in p.lower() else 1 if "bf16" in p.lower() else 2, p))
+print(fs[0] if fs else "")')"
+  if [[ -n "$proj" && ! -f "${out:r}.mmproj.gguf" ]]; then
+    local yn; read "yn?This repo has a vision projector ($proj, ~1 GB) for image input. Download it? [Y/n]: "
+    [[ "$yn" == [nN]* ]] || fetch "$repo" "$proj" "${out:r}.mmproj.gguf" || exit 1
+  fi
+}
+
+fetch() {  # fetch <repo> <file> <out>; -C - resumes an interrupted download
+  echo "Downloading: $1/$2 -> $3"
+  if curl -fL -C - --retry 5 --progress-bar -o "$3.part" "https://huggingface.co/$1/resolve/main/$2"; then
+    mv "$3.part" "$3" && echo "Done: ${3:t}"
   else
-    echo "Download interrupted; run the same command again to resume." >&2; exit 1
+    echo "Download interrupted; run the same command again to resume." >&2; return 1
   fi
 }
 
