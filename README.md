@@ -18,7 +18,7 @@
 ### Homebrew
 
 ```bash
-brew install dikeckaan/tap/claude-qwen          # llama.cpp'yi de kurar
+brew install dikeckaan/claude-qwen/claude-qwen   # llama.cpp'yi de kurar
 claude-qwen download unsloth/Qwen3.8-27B-GGUF    # listeden bir quant seç
 claude-qwen
 ```
