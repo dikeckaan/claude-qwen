@@ -15,6 +15,18 @@
 
 ## Kurulum
 
+### Homebrew
+
+```bash
+brew install dikeckaan/tap/claude-qwen          # llama.cpp'yi de kurar
+claude-qwen download unsloth/Qwen3.8-27B-GGUF    # listeden bir quant seç
+claude-qwen
+```
+
+Modeller ve loglar `~/.claude-qwen` klasörüne yazılır. Başka bir klasör için `CLAUDE_QWEN_HOME` değişkenini kullan.
+
+### Git ile
+
 ```bash
 git clone https://github.com/dikeckaan/claude-qwen.git ~/claude-qwen
 ~/claude-qwen/claude-qwen setup              # llama.cpp (brew) kurar, komutu ~/.local/bin'e bağlar

@@ -6,6 +6,9 @@
 #   claude-qwen models                  indirilmiş modelleri listele
 #   claude-qwen setup                   llama.cpp kur, komutu PATH'e bağla, sudo kuralını göster
 #   claude-qwen stop | status | log     sunucuyu durdur / durum / logu izle
+#   claude-qwen version
+#
+# Veri (modeller, log): git klonunda klasörün kendisi, aksi halde ~/.claude-qwen (CLAUDE_QWEN_HOME ile değişir)
 #
 # Ortam değişkenleri:
 #   QWEN_MODEL=<no|dosya-adı>  menüyü atla           QWEN_CTX=102400   bağlam boyutu
@@ -15,15 +18,24 @@
 #   QWEN_PORT=8088             QWEN_EXTRA="..." ek llama-server argümanları
 set -u
 
-DIR="${0:A:h}"
-MODELS_DIR="$DIR/models"
+VERSION="0.1.0"
+DIR="${0:A:h}"   # betiğin gerçek konumu (symlink çözülmüş)
+# Veri klasörü: git klonunda (yanında models/ varsa) klasörün kendisi, brew kurulumunda ~/.claude-qwen
+if [[ -n "${CLAUDE_QWEN_HOME:-}" ]]; then DATA="$CLAUDE_QWEN_HOME"
+elif [[ -d "$DIR/models" ]]; then DATA="$DIR"
+else DATA="$HOME/.claude-qwen"; fi
+mkdir -p "$DATA"
+# Yamalı şablon: klonda betiğin yanında, brew'da ../share/claude-qwen altında
+TEMPLATE="$DIR/chat_template.jinja"
+[[ -f "$TEMPLATE" ]] || TEMPLATE="${DIR:h}/share/claude-qwen/chat_template.jinja"
+MODELS_DIR="$DATA/models"
 PORT="${QWEN_PORT:-8088}"
 CTX="${QWEN_CTX:-102400}"
 EFFORT="${QWEN_EFFORT:-medium}"
 MTP="${QWEN_MTP:-auto}"
-PIDFILE="$DIR/server.pid"
-LOG="$DIR/server.log"
-SESSIONS="$DIR/sessions"
+PIDFILE="$DATA/server.pid"
+LOG="$DATA/server.log"
+SESSIONS="$DATA/sessions"
 URL="http://127.0.0.1:$PORT"
 ALIAS="local-model"
 RAM_MB=$(( $(sysctl -n hw.memsize) / 1048576 ))
@@ -69,7 +81,7 @@ start_server() {
   local extra=()
   [[ "$MTP" == 1 ]] && extra+=(--spec-type draft-mtp --spec-draft-n-max 3)
   # Qwen3.8 şablonu Claude Code'un konuşma ortası system mesajlarını reddediyor; yamalı şablonu kullan.
-  [[ "${MODEL:t}" == *[Qq]wen3.8* && -f "$DIR/chat_template.jinja" ]] && extra+=(--chat-template-file "$DIR/chat_template.jinja")
+  [[ "${MODEL:t}" == *[Qq]wen3.8* && -f "$TEMPLATE" ]] && extra+=(--chat-template-file "$TEMPLATE")
   echo "${MODEL:t} yükleniyor (~30-60 sn, MTP: $([[ $MTP == 1 ]] && echo açık || echo kapalı))..."
   nohup llama-server \
     -m "$MODEL" --alias "$ALIAS" \
@@ -181,8 +193,11 @@ setup() {
   command -v brew >/dev/null || { echo "Homebrew gerekli: https://brew.sh" >&2; exit 1; }
   command -v llama-server >/dev/null || brew install llama.cpp
   command -v claude >/dev/null || echo "Claude Code bulunamadı: https://code.claude.com"
-  mkdir -p "$HOME/.local/bin" && ln -sf "$DIR/claude-qwen" "$HOME/.local/bin/claude-qwen"
-  echo "claude-qwen -> ~/.local/bin/claude-qwen (bu klasör PATH'te olmalı)"
+  if [[ "$DIR" != */Cellar/* ]]; then
+    mkdir -p "$HOME/.local/bin" && ln -sf "$DIR/claude-qwen" "$HOME/.local/bin/claude-qwen"
+    echo "claude-qwen -> ~/.local/bin/claude-qwen (bu klasör PATH'te olmalı)"
+  fi
+  echo "Veri klasörü: $DATA"
   echo
   echo "İsteğe bağlı (MTP / büyük bağlam için): sunucu açıkken GPU bellek sınırını şifresiz"
   echo "yükseltebilmek için AYRI bir terminalde şunu çalıştır:"
@@ -199,6 +214,7 @@ case "${1:-}" in
   models)   list_models | while read -r f; do echo "${f:t}  ($(human $(stat -f%z "$f")))"; done; exit 0 ;;
   download) shift; download "$@"; exit $? ;;
   setup)    setup; exit 0 ;;
+  version|--version) echo "claude-qwen $VERSION"; exit 0 ;;
 esac
 
 choose_model
